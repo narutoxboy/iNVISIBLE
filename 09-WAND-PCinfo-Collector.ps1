@@ -46,45 +46,6 @@ function Get-StringFromBytes($bytes) {
     return $text.Trim()
 }
 
-# Function to safely append to the output file
-function Append-ToFile {
-    param ([string]$Line)
-    $Attempts = 0
-    Write-DebugLog "Attempting to append to $OutputFile"
-    while ($Attempts -lt $MaxRetries) {
-        try {
-            # Write header if file doesn't exist
-            if (-not (Test-Path $OutputFile)) {
-                Write-DebugLog "Writing header to $OutputFile"
-                "STT||DateTime||ComputerName||CPUName||RAM(GB)||DISK-C(GB)||DISK-D(GB)||GPUName||Mainboard||IPAddress||Monitors||NetworkAdapters" | Out-File -FilePath $OutputFile -Encoding utf8 -ErrorAction Stop
-            }
-
-            # Calculate sequence number
-            $SequenceNumber = (Get-Content -Path $OutputFile | Measure-Object -Line).Lines
-            if ($SequenceNumber -eq 1) { $SequenceNumber = 1 } # Start with 1 if only header exists
-            else { $SequenceNumber = $SequenceNumber } # Increment for new line (excluding header)
-
-            # Prepend sequence number to the line
-            $LineWithSequence = "$SequenceNumber||$Line"
-
-            # Append the line with sequence number
-            $LineWithSequence | Out-File -FilePath $OutputFile -Append -Encoding utf8 -ErrorAction Stop
-            Write-DebugLog "Successfully appended line with sequence $SequenceNumber to $OutputFile"
-            return $true
-        }
-        catch {
-            $Attempts++
-            Write-DebugLog "Write attempt $Attempts failed: $_"
-            if ($Attempts -eq $MaxRetries) {
-                Write-DebugLog "Failed to append to $OutputFile after $MaxRetries attempts"
-                return $false
-            }
-            Start-Sleep -Seconds $RetryDelay
-        }
-    }
-    return $false
-}
-
 Write-Host "================================================" -ForegroundColor Yellow
 Write-Host "Dang kiem tra thong tin phan cung....." -ForegroundColor Red
 Write-Host "------------------------------------------------" -ForegroundColor Yellow
@@ -116,14 +77,6 @@ try {
             Write-DebugLog "Failed to set ExecutionPolicy: $_"
             throw "Cannot set ExecutionPolicy to RemoteSigned: $_"
         }
-    }
-
-    # Check network share accessibility
-    $SharePath = Split-Path $OutputFile -Parent
-    Write-DebugLog "Checking network share: $SharePath"
-    if (-not (Test-Path $SharePath)) {
-        Write-DebugLog "Network share test failed. Attempting with credentials."
-        throw "Cannot access network share $SharePath. Check permissions or network connectivity."
     }
 
     # Initialize result object
@@ -166,8 +119,7 @@ try {
 
         # RAM (convert bytes to GB)
         try {
-           #$Result.RAMGB = [math]::Round((Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory / 1GB, 2)
-			$Result.RAMGB = [math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB) + 1
+            $Result.RAMGB = [math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB) + 1
             Write-DebugLog "Collected RAMGB: $($Result.RAMGB)"
         }
         catch {
@@ -175,21 +127,21 @@ try {
             $Result.RAMGB = "Unknown"
         }
 
-		# Drive C: and D: Capacity (in GB)
-		try {
-			$LogicalDisks = Get-CimInstance -ClassName Win32_LogicalDisk -ErrorAction Stop | Where-Object { $_.DeviceID -in @("C:", "D:") }
-			$DriveC = $LogicalDisks | Where-Object { $_.DeviceID -eq "C:" }
-			$Result.DriveC_CapacityGB = if ($DriveC) { [math]::Round($DriveC.Size / 1GB, 0) } else { "0" }
-			Write-DebugLog "Collected DriveC_CapacityGB: $($Result.DriveC_CapacityGB)"
-			$DriveD = $LogicalDisks | Where-Object { $_.DeviceID -eq "D:" }
-			$Result.DriveD_CapacityGB = if ($DriveD) { [math]::Round($DriveD.Size / 1GB, 0) } else { "0" }
-			Write-DebugLog "Collected DriveD_CapacityGB: $($Result.DriveD_CapacityGB)"
-		}
-		catch {
-			Write-DebugLog "Failed to collect drive capacities: $_"
-			$Result.DriveC_CapacityGB = "0"
-			$Result.DriveD_CapacityGB = "0"
-		}
+        # Drive C: and D: Capacity (in GB)
+        try {
+            $LogicalDisks = Get-CimInstance -ClassName Win32_LogicalDisk -ErrorAction Stop | Where-Object { $_.DeviceID -in @("C:", "D:") }
+            $DriveC = $LogicalDisks | Where-Object { $_.DeviceID -eq "C:" }
+            $Result.DriveC_CapacityGB = if ($DriveC) { [math]::Round($DriveC.Size / 1GB, 0) } else { "0" }
+            Write-DebugLog "Collected DriveC_CapacityGB: $($Result.DriveC_CapacityGB)"
+            $DriveD = $LogicalDisks | Where-Object { $_.DeviceID -eq "D:" }
+            $Result.DriveD_CapacityGB = if ($DriveD) { [math]::Round($DriveD.Size / 1GB, 0) } else { "0" }
+            Write-DebugLog "Collected DriveD_CapacityGB: $($Result.DriveD_CapacityGB)"
+        }
+        catch {
+            Write-DebugLog "Failed to collect drive capacities: $_"
+            $Result.DriveC_CapacityGB = "0"
+            $Result.DriveD_CapacityGB = "0"
+        }
 
         # GPU Name
         try {
@@ -306,32 +258,31 @@ try {
         throw "Failed to collect system information: $_"
     }
 
-    # Format output line for file
+    # Format output line for console display only
     $MonitorsString = ($Result.Monitors | ForEach-Object { "$($_.Model),$($_.Serial),$($_.Date)" }) -join ";"
     $NetworkAdaptersString = ($Result.NetworkAdapters | ForEach-Object { "$($_.Name),$($_.Speed)" }) -join ";"
     $OutputLine = "$($Result.DateTime)||$($Result.ComputerName)||$($Result.CPUName)||$($Result.RAMGB)||$($Result.DriveC_CapacityGB)||$($Result.DriveD_CapacityGB)||$($Result.GPUName)||$($Result.MainboardModel)||$($Result.IPAddress)||$MonitorsString||$NetworkAdaptersString"
     Write-DebugLog "Formatted output line: $OutputLine"
 
     # Display formatted output in console
-	Write-Host "                    -o-X-o-" -ForegroundColor Green
+    Write-Host "                    -o-X-o-" -ForegroundColor Green
     Write-Host "      WAND - THONG TIN PHAN CUNG MAY TINH" -ForegroundColor Cyan
-	Write-Host "                    -o-X-o-" -ForegroundColor Green
+    Write-Host "                    -o-X-o-" -ForegroundColor Green
     Write-Host "DATE - TIME            :     $($Result.DateTime)" -ForegroundColor Blue
     Write-Host "TEN NHAN VIEN          :     $($Result.ComputerName)" -ForegroundColor Green
-	Write-Host "------------------------------------------------" -ForegroundColor Yellow
+    Write-Host "------------------------------------------------" -ForegroundColor Yellow
     Write-Host "TEN CPU                :  $($Result.CPUName)"
     Write-Host "DUNG LUONG RAM         :  $($Result.RAMGB) GB" -ForegroundColor DarkGray
     Write-Host "DUNG LUONG O C         :  $($Result.DriveC_CapacityGB) GB"
     Write-Host "DUNG LUONG O D         :  $($Result.DriveD_CapacityGB) GB" -ForegroundColor DarkGray
     Write-Host "TEN GPU                :  $($Result.GPUName)"
     Write-Host "TEN MAINBOARD          :  $($Result.MainboardModel)" -ForegroundColor DarkGray
-	if ($Result.NetworkAdapters.Count -gt 0) {
-		foreach ($adapter in $Result.NetworkAdapters) {
-	Write-Host "TOC DO MANG            :  $($adapter.Speed) Mbps"
+    if ($Result.NetworkAdapters.Count -gt 0) {
+        foreach ($adapter in $Result.NetworkAdapters) {
+            Write-Host "TOC DO MANG            :  $($adapter.Speed) Mbps"
         }	
-	}	
+    }	
     Write-Host "DIA CHI IP             :  $($Result.IPAddress)" -ForegroundColor DarkGray
-
 
     Write-DebugLog "Displayed formatted output to console"
 
@@ -346,28 +297,10 @@ try {
         Write-Host ""
     }
 
-#    if ($Result.NetworkAdapters.Count -gt 0) {
-#        Write-Host "============ THONG TIN CARD MANG ===========" -ForegroundColor Red
-#        foreach ($adapter in $Result.NetworkAdapters) {
-#            Write-Host "TEN CARD MANG  :  $($adapter.Name)" -ForegroundColor Green
-#            Write-Host "TOC DO MANG    :  $($adapter.Speed) Mbps"
-#            Write-Host "--------------------------------------------"
-#        }
-#        Write-Host ""
-#    }
-
-    # Append to file
-    $Success = Append-ToFile -Line $OutputLine
-    if (-not $Success) {
-        Write-DebugLog "Writing to local fallback: $env:TEMP\PC-information.txt"
-        $OutputLine | Out-File -FilePath "$env:TEMP\PC-information.txt" -Append -Encoding utf8
-        Write-Host "Failed to write to network share. Saved to $env:TEMP\PC-information.txt" -ForegroundColor Yellow
-    }
-
     # Prompt for exit (interactive mode only)
-		Write-Host "================================================" -ForegroundColor Yellow
+    Write-Host "================================================" -ForegroundColor Yellow
     if ($Host.Name -eq "ConsoleHost") {
-		Write-Host "Boi den va bam phim ENTER de copy Serial, Date"
+        Write-Host "Boi den va bam phim ENTER de copy Serial, Date"
         Write-Host "Bam phim ENTER de thoat..." -NoNewline -ForegroundColor Green
         $null = Read-Host
         Write-DebugLog "Displayed exit prompt and received Enter"
