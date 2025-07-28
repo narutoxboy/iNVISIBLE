@@ -2,7 +2,7 @@
 # narutoxboy
 
 # Define file paths
-$OutputFile = "\\172.16.0.9\Temp\PC\PC-information.txt"
+$OutputFile = "%TEMP%\PC-information.txt"
 $DebugLog = "$env:TEMP\PC-info-debug.log"
 $MaxRetries = 10  # Increased for better concurrency
 $RetryDelay = 5   # Increased delay (seconds)
