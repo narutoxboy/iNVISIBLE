@@ -2,6 +2,7 @@
 # narutoxboy
 
 # Define file paths
+$OutputFile = "$env:TEMP\PC-information.txt"
 $DebugLog = "$env:TEMP\PC-info-debug.log"
 $MaxRetries = 10  # Increased for better concurrency
 $RetryDelay = 5   # Increased delay (seconds)
@@ -45,7 +46,44 @@ function Get-StringFromBytes($bytes) {
     return $text.Trim()
 }
 
+# Function to safely append to the output file
+function Append-ToFile {
+    param ([string]$Line)
+    $Attempts = 0
+    Write-DebugLog "Attempting to append to $OutputFile"
+    while ($Attempts -lt $MaxRetries) {
+        try {
+            # Write header if file doesn't exist
+            if (-not (Test-Path $OutputFile)) {
+                Write-DebugLog "Writing header to $OutputFile"
+                "STT||DateTime||ComputerName||CPUName||RAM(GB)||DISK-C(GB)||DISK-D(GB)||GPUName||Mainboard||IPAddress||Monitors||NetworkAdapters" | Out-File -FilePath $OutputFile -Encoding utf8 -ErrorAction Stop
+            }
 
+            # Calculate sequence number
+            $SequenceNumber = (Get-Content -Path $OutputFile | Measure-Object -Line).Lines
+            if ($SequenceNumber -eq 1) { $SequenceNumber = 1 } # Start with 1 if only header exists
+            else { $SequenceNumber = $SequenceNumber } # Increment for new line (excluding header)
+
+            # Prepend sequence number to the line
+            $LineWithSequence = "$SequenceNumber||$Line"
+
+            # Append the line with sequence number
+            $LineWithSequence | Out-File -FilePath $OutputFile -Append -Encoding utf8 -ErrorAction Stop
+            Write-DebugLog "Successfully appended line with sequence $SequenceNumber to $OutputFile"
+            return $true
+        }
+        catch {
+            $Attempts++
+            Write-DebugLog "Write attempt $Attempts failed: $_"
+            if ($Attempts -eq $MaxRetries) {
+                Write-DebugLog "Failed to append to $OutputFile after $MaxRetries attempts"
+                return $false
+            }
+            Start-Sleep -Seconds $RetryDelay
+        }
+    }
+    return $false
+}
 
 Write-Host "================================================" -ForegroundColor Yellow
 Write-Host "Dang kiem tra thong tin phan cung....." -ForegroundColor Red
